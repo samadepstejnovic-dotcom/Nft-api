@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>NFT Guarantee App</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        :root {
+            --bg: var(--tg-theme-bg-color, #17212b);
+            --text: var(--tg-theme-text-color, #ffffff);
+            --hint: var(--tg-theme-hint-color, #708499);
+            --btn: var(--tg-theme-button-color, #2481cc);
+            --btn-text: var(--tg-theme-button-text-color, #ffffff);
+            --card: var(--tg-theme-secondary-bg-color, #232e3c);
+            --danger: #e53935;
+        }
+        body { font-family: -apple-system, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 16px; padding-bottom: 80px; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        h1 { font-size: 22px; margin: 0; }
+        .lang-btn { background: var(--card); color: var(--text); border: none; padding: 6px 12px; border-radius: 8px; font-weight: bold; cursor: pointer; }
+        
+        .card { background: var(--card); border-radius: 12px; padding: 16px; margin-bottom: 12px; position: relative; overflow: hidden; }
+        .card h3 { margin: 0 0 8px 0; font-size: 16px; }
+        .card p { margin: 0; color: var(--hint); font-size: 13px; }
+        .price { position: absolute; top: 16px; right: 16px; font-weight: bold; color: #4caf50; font-size: 16px; }
+        
+        .btn { background: var(--btn); color: var(--btn-text); border: none; padding: 14px; border-radius: 12px; width: 100%; font-size: 16px; font-weight: bold; cursor: pointer; margin-top: 20px; box-sizing: border-box; }
+        
+        /* Модальное окно */
+        .modal { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 100; align-items: center; justify-content: center; padding: 20px; }
+        .modal-content { background: var(--bg); width: 100%; max-width: 400px; border-radius: 16px; padding: 20px; box-sizing: border-box; }
+        .modal h2 { margin-top: 0; font-size: 18px; }
+        input { width: 100%; padding: 12px; margin-bottom: 10px; border-radius: 8px; border: 1px solid var(--hint); background: var(--card); color: var(--text); box-sizing: border-box; font-size: 16px; }
+        .row { display: flex; gap: 10px; }
+        .row input { flex: 1; }
+        .btn-close { background: var(--danger); margin-top: 10px; }
+        .loading { text-align: center; color: var(--hint); margin-top: 40px; font-style: italic; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1 id="title">Мои сделки</h1>
+        <button class="lang-btn" onclick="toggleLang()">EN</button>
+    </div>
+    
+    <div id="offers-list"><div class="loading">Загрузка данных...</div></div>
+    <button class="btn" onclick="openModal()" id="create-btn">➕ Создать оффер</button>
+
+    <!-- Модальное окно создания -->
+    <div class="modal" id="modal">
+        <div class="modal-content">
+            <h2 id="modal-title">Создать оффер</h2>
+            <input type="text" id="inp-link" placeholder="Ссылка на NFT (https://t.me/nft/...)" />
+            <div class="row">
+                <input type="number" id="inp-price" placeholder="Цена (500)" />
+                <select id="inp-cur" style="width: 40%; padding: 12px; border-radius: 8px; background: var(--card); color: var(--text); border: 1px solid var(--hint);">
+                    <option value="stars">⭐ Stars</option>
+                    <option value="gram">💎 GRAM</option>
+                </select>
+            </div>
+            <button class="btn" onclick="createOffer()" id="btn-submit">Отправить</button>
+            <button class="btn btn-close" onclick="closeModal()">Отмена</button>
+        </div>
+    </div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+
+        const dict = {
+            ru: { title: "Мои сделки", create: "➕ Создать оффер", modal: "Создать оффер", submit: "Отправить", cancel: "Отмена", loading: "Загрузка данных...", err: "Ошибка соединения. Сервер просыпается, подождите...", empty: "У вас пока нет активных сделок" },
+            en: { title: "My Deals", create: "➕ Create Offer", modal: "Create Offer", submit: "Submit", cancel: "Cancel", loading: "Loading...", err: "Connection error. Server is waking up...", empty: "You have no active deals yet" }
+        };
+        let lang = 'ru';
+        let offers = [];
+        const API = "https://nft-api-1tnt.onrender.com/api/offers";
+
+        function toggleLang() {
+            lang = lang === 'ru' ? 'en' : 'ru';
+            document.querySelector('.lang-btn').innerText = lang === 'ru' ? 'EN' : 'RU';
+            updateUI();
+        }
+
+        function updateUI() {
+            const t = dict[lang];
+            document.getElementById('title').innerText = t.title;
+            document.getElementById('create-btn').innerText = t.create;
+            document.getElementById('modal-title').innerText = t.modal;
+            document.getElementById('btn-submit').innerText = t.submit;
+            document.querySelector('.btn-close').innerText = t.cancel;
+            renderOffers();
+        }
+
+        // Загрузка с повторными попытками (на случай, если Render спит)
+        async function loadOffers(retries = 5) {
+            const list = document.getElementById('offers-list');
+            try {
+                const res = await fetch(API);
+                offers = await res.json();
+                renderOffers();
+            } catch (e) {
+                if (retries > 0) {
+                    list.innerHTML = `<div class="loading">${dict[lang].err} (${retries})</div>`;
+                    setTimeout(() => loadOffers(retries - 1), 5000);
+                } else {
+                    list.innerHTML = `<p style="color:var(--danger);text-align:center">${dict[lang].err}</p>`;
+                }
+            }
+        }
+
+        function renderOffers() {
+            const list = document.getElementById('offers-list');
+            const t = dict[lang];
+            list.innerHTML = '';
+            if (offers.length === 0) {
+                list.innerHTML = `<p style="text-align:center; color:var(--hint)">${t.empty}</p>`;
+                return;
+            }
+            offers.forEach(o => {
+                const ic = o.cur === 'stars' ? '⭐' : 'GRAM';
+                list.innerHTML += `
+                    <div class="card">
+                        <div class="price">${o.price} ${ic}</div>
+                        <h3>${o.title}</h3>
+                        <p>Статус: ${o.status}</p>
+                    </div>
+                `;
+            });
+        }
+
+        function openModal() { document.getElementById('modal').style.display = 'flex'; }
+        function closeModal() { document.getElementById('modal').style.display = 'none'; }
+
+        function createOffer() {
+            const link = document.getElementById('inp-link').value;
+            const price = document.getElementById('inp-price').value;
+            const cur = document.getElementById('inp-cur').value;
+            
+            if (!link || !price) return tg.showAlert("Заполните все поля");
+            
+            // Отправляем данные в бота
+            const data = { action: "create", link: link, price: parseInt(price), cur: cur };
+            tg.sendData(JSON.stringify(data));
+            tg.close();
+        }
+
+        loadOffers();
+        updateUI();
+    </script>
+</body>
+  </html>
